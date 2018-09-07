@@ -24,6 +24,7 @@ namespace WebApp_Storage_DotNet.Controllers
     using Microsoft.WindowsAzure.Storage.Blob;
     using Microsoft.Azure;
     using System.Configuration;
+    using WebApp_Storage_DotNet.Interfaces;
 
     /// <summary> 
     /// Azure Blob Storage Photo Gallery - Demonstrates how to use the Blob Storage service.  
@@ -48,6 +49,12 @@ namespace WebApp_Storage_DotNet.Controllers
         static CloudBlobClient blobClient;
         const string blobContainerName = "webappstoragedotnet-imagecontainer";
         static CloudBlobContainer blobContainer;
+        private readonly IFileService _fileService;
+
+        public HomeController(IFileService fileService)
+        {
+            _fileService = fileService;
+        }
 
         /// <summary> 
         /// Task<ActionResult> Index() 
@@ -61,37 +68,14 @@ namespace WebApp_Storage_DotNet.Controllers
         {
             try
             {
-                // Retrieve storage account information from connection string
-                // How to create a storage connection string - http://msdn.microsoft.com/en-us/library/azure/ee758697.aspx
-                CloudStorageAccount storageAccount = CloudStorageAccount.Parse(ConfigurationManager.AppSettings["StorageConnectionString"].ToString());
-
-                // Create a blob client for interacting with the blob service.
-                blobClient = storageAccount.CreateCloudBlobClient();
-                blobContainer = blobClient.GetContainerReference(blobContainerName);
-                await blobContainer.CreateIfNotExistsAsync();
-
-                // To view the uploaded blob in a browser, you have two options. The first option is to use a Shared Access Signature (SAS) token to delegate  
-                // access to the resource. See the documentation links at the top for more information on SAS. The second approach is to set permissions  
-                // to allow public access to blobs in this container. Comment the line below to not use this approach and to use SAS. Then you can view the image  
-                // using: https://[InsertYourStorageAccountNameHere].blob.core.windows.net/webappstoragedotnet-imagecontainer/FileName 
-                await blobContainer.SetPermissionsAsync(new BlobContainerPermissions { PublicAccess = BlobContainerPublicAccessType.Blob });
-
-                // Gets all Cloud Block Blobs in the blobContainerName and passes them to teh view
-                List<Uri> allBlobs = new List<Uri>();
-                foreach (IListBlobItem blob in blobContainer.ListBlobs())
-                {
-                    if (blob.GetType() == typeof(CloudBlockBlob))
-                        allBlobs.Add(blob.Uri);
-                }
-
-                return View(allBlobs);
+                return View(await _fileService.ListFileUris());
             }
             catch (Exception ex)
             {
                 ViewData["message"] = ex.Message;
                 ViewData["trace"] = ex.StackTrace;
                 return View("Error");
-            } 
+            }
         }
 
         /// <summary> 
@@ -109,11 +93,15 @@ namespace WebApp_Storage_DotNet.Controllers
 
                 if (fileCount > 0)
                 {
+                    var tasks = new List<Task>();
+                    // TODO: make parallel
                     for (int i = 0; i < fileCount; i++)
                     {
-                        CloudBlockBlob blob = blobContainer.GetBlockBlobReference(GetRandomBlobName(files[i].FileName));
-                        await blob.UploadFromFileAsync(files[i].FileName, FileMode.Open);
+                        tasks.Add(
+                        _fileService.UploadFileFromStream(files[i].InputStream,
+                            files[i].FileName));
                     }
+                    await Task.WhenAll(tasks);
                 }
                 return RedirectToAction("Index");
             }
@@ -122,7 +110,7 @@ namespace WebApp_Storage_DotNet.Controllers
                 ViewData["message"] = ex.Message;
                 ViewData["trace"] = ex.StackTrace;
                 return View("Error");
-            }            
+            }
         }
 
         /// <summary> 
@@ -139,7 +127,7 @@ namespace WebApp_Storage_DotNet.Controllers
                 string filename = Path.GetFileName(uri.LocalPath);
 
                 var blob = blobContainer.GetBlockBlobReference(filename);
-                await blob.DeleteIfExistsAsync();
+                var result = await blob.DeleteIfExistsAsync();
 
                 return RedirectToAction("Index");
             }
@@ -165,7 +153,7 @@ namespace WebApp_Storage_DotNet.Controllers
                 {
                     if (blob.GetType() == typeof(CloudBlockBlob))
                     {
-                        await ((CloudBlockBlob)blob).DeleteIfExistsAsync();
+                        var result = await ((CloudBlockBlob)blob).DeleteIfExistsAsync();
                     }
                 }
 
